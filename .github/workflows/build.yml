@@ -1,0 +1,66 @@
+name: Build mod
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack archive
+        shell: bash
+        run: |
+          set -e
+          ZIP=$(ls -1 pcmod-*.zip 2>/dev/null | sort -V | tail -n1 || true)
+          if [ -z "$ZIP" ]; then echo "::error::В корне репозитория нет pcmod-*.zip"; exit 1; fi
+          echo "Архив: $ZIP"
+          rm -rf src_unpacked && mkdir src_unpacked
+          unzip -q "$ZIP" -d src_unpacked
+          GRADLE=$(find src_unpacked -name build.gradle -not -path '*/node_modules/*' | head -n1)
+          if [ -z "$GRADLE" ]; then echo "::error::В архиве нет build.gradle"; exit 1; fi
+          echo "PROJECT_DIR=$(dirname "$GRADLE")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.8
+
+      - name: Build
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle build --stacktrace --no-daemon 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+
+      - name: Upload jar
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcmod-1.20.1-1.0.2
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ env.PROJECT_DIR }}/build.log
+          if-no-files-found: ignore
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          generate_release_notes: true
